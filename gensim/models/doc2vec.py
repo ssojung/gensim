@@ -119,6 +119,10 @@ except ImportError:
                           learn_doctags=True, learn_words=True, learn_hidden=True,
                           word_vectors=None, word_locks=None, doctag_vectors=None, doctag_locks=None):
         """
+        
+        tally += train_document_dm(self, doc.words, doctag_indexes, alpha, work, neu1,
+                                doctag_vectors=doctag_vectors, doctag_locks=doctag_locks)
+                                           
         Update distributed memory model ("PV-DM") by training on a single document.
 
         Called internally from `Doc2Vec.train()` and `Doc2Vec.infer_vector()`. This
@@ -139,29 +143,36 @@ except ImportError:
         will use the optimized version from doc2vec_inner instead.
 
         """
+
+
         if word_vectors is None:
             word_vectors = model.wv.syn0
         if word_locks is None:
             word_locks = model.syn0_lockf
+        # doc2vec 관련 vector들은 None이 아니니까 여기는 pass through
         if doctag_vectors is None:
             doctag_vectors = model.docvecs.doctag_syn0
         if doctag_locks is None:
             doctag_locks = model.docvecs.doctag_syn0_lockf
 
+        #  tally += train_document_dm(self, doc.words, doctag_indexes, alpha, work, neu1,
+        #                        doctag_vectors=doctag_vectors, doctag_locks=doctag_locks)
+
         word_vocabs = [model.wv.vocab[w] for w in doc_words if w in model.wv.vocab and
                        model.wv.vocab[w].sample_int > model.random.rand() * 2**32]
 
+        # position, word
         for pos, word in enumerate(word_vocabs):
             reduced_window = model.random.randint(model.window)  # `b` in the original doc2vec code
             start = max(0, pos - model.window + reduced_window)
             window_pos = enumerate(word_vocabs[start:(pos + model.window + 1 - reduced_window)], start)
             word2_indexes = [word2.index for pos2, word2 in window_pos if pos2 != pos]
-            l1 = np_sum(word_vectors[word2_indexes], axis=0) + np_sum(doctag_vectors[doctag_indexes], axis=0)
+            l1 = np_sum(word_vectors[word2_indexes], axis=0) + np_sum(doctag_vectors[doctag_indexes], axis=0) #hidden 값? layer1?
             count = len(word2_indexes) + len(doctag_indexes)
             if model.cbow_mean and count > 1 :
                 l1 /= count
             neu1e = train_cbow_pair(model, word, word2_indexes, l1, alpha,
-                                    learn_vectors=False, learn_hidden=learn_hidden)
+                                    learn_vectors=False, learn_hidden=learn_hidden) #return error값...
             if not model.cbow_mean and count > 1:
                 neu1e /= count
             if learn_doctags:
@@ -620,7 +631,7 @@ class Doc2Vec(Word2Vec):
             raise DeprecationWarning("'sentences' in doc2vec was renamed to 'documents'. Please use documents parameter.")
 
         super(Doc2Vec, self).__init__(
-            sg=(1 + dm) % 2,
+            sg=(1 + dm) % 2, #dm->1이면 sg는 0. cbow
             null_word=dm_concat,
             **kwargs)
 
@@ -708,10 +719,16 @@ class Doc2Vec(Word2Vec):
         self.raw_vocab = vocab
 
     def _do_train_job(self, job, alpha, inits):
+        #job is sentences
         work, neu1 = inits
         tally = 0
         for doc in job:
-            indexed_doctags = self.docvecs.indexed_doctags(doc.tags)
+            indexed_doctags = self.docvecs.indexed_doctags(doc.tags) #사실은 그냥 tag... no tags
+            """
+            def indexed_doctags(self, doctag_tokens):
+                return ([self._int_index(index) for index in doctag_tokens if index in self],
+                    self.doctag_syn0, self.doctag_syn0_lockf, doctag_tokens)
+            """
             doctag_indexes, doctag_vectors, doctag_locks, ignored = indexed_doctags
             if self.sg:
                 tally += train_document_dbow(self, doc.words, doctag_indexes, alpha, work,
