@@ -624,6 +624,7 @@ class Word2Vec(utils.SaveLoad):
         unless `keep_raw_vocab` is set.
 
         """
+        logger.info("*****word2vec scale_vocab is called!")
         min_count = min_count or self.min_count
         sample = sample or self.sample
         drop_total = drop_unique = 0
@@ -729,6 +730,7 @@ class Word2Vec(utils.SaveLoad):
         return report_values
 
     def finalize_vocab(self, update=False):
+        logger.info("*****word2vec finalize is called!")
         """Build tables and model weights based on final vocabulary settings."""
         if not self.wv.index2word:
             self.scale_vocab()
@@ -856,7 +858,7 @@ class Word2Vec(utils.SaveLoad):
         def worker_loop():
             """Train the model, lifting lists of sentences from the job_queue."""
             work = matutils.zeros_aligned(self.layer1_size, dtype=REAL)  # per-thread private work memory
-            neu1 = matutils.zeros_aligned(self.layer1_size, dtype=REAL)
+            neu1 = matutils.zeros_aligned(self.layer1_size, dtype=REAL) # like np.zeros
             jobs_processed = 0
             while True:
                 job = job_queue.get()

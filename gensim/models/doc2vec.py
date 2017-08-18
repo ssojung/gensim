@@ -67,6 +67,51 @@ from six import string_types, integer_types
 
 logger = logging.getLogger(__name__)
 
+
+def build_sim_operator():
+    import numpy as np
+    import pandas as pd
+    path = '/home/sojung/data/sigmaDB/level1_sim.csv'
+    df = pd.read_csv(path)
+    # cid2idx
+    unique_ids = df.categoryidA.unique()
+
+    cid2idx = {}
+    tags = []
+    for i in range(len(unique_ids)):
+        cid2idx[unique_ids[i]] = i
+    # tag2id
+    # category information
+    cate_path = '/home/sojung/data/sigmaDB/category_info.csv'
+    cate_df = pd.read_csv(cate_path)
+    tag2id = {}
+    for idx, row in cate_df.iterrows():
+        # print idx
+        # print row['categoryidA'], row['categoryidB'], row['relevance']
+        cid = int(row['categoryID'])
+        if cid in cid2idx:
+            tag = row['name'].split('/')[1].lower()
+            tags.append(tag)
+            tag2id[tag] = cid2idx[cid]
+    # sim_matrix. linear_operator
+    num_category = len(cid2idx)
+    sim_matrix = np.zeros((num_category, num_category))
+    for idx, row in df.iterrows():
+        # print idx
+        # print row['categoryidA'], row['categoryidB'], row['relevance']
+        a = cid2idx[int(row['categoryidA'])]
+        b = cid2idx[int(row['categoryidB'])]
+        sim_matrix[a][b] = row['relevance']
+    # normalize
+    i = 0
+    for row in sim_matrix:
+        sum = row.sum()
+        sim_matrix[i] = np.divide(row, sum)
+        i = i + 1
+    return tag2id, sim_matrix
+
+tag2idx, sim_operator = build_sim_operator()
+
 try:
     from gensim.models.doc2vec_inner import train_document_dbow, train_document_dm, train_document_dm_concat
     from gensim.models.word2vec_inner import FAST_VERSION  # blas-adaptation shared from word2vec
@@ -144,15 +189,20 @@ except ImportError:
 
         """
 
-
+        #logger.info('*****')
+        # word2vec 관련 vector들은 None. assigned here
         if word_vectors is None:
+            #logger.info('word_vectors assigned')
             word_vectors = model.wv.syn0
         if word_locks is None:
+            #logger.info('word_locks assigned')
             word_locks = model.syn0_lockf
-        # doc2vec 관련 vector들은 None이 아니니까 여기는 pass through
+        # doc2vec 관련 vector들은 None이 아니니까 여기는 pass
         if doctag_vectors is None:
+            logger.info('doc_vectors assigned')
             doctag_vectors = model.docvecs.doctag_syn0
         if doctag_locks is None:
+            logger.info('doc_locks assigned')
             doctag_locks = model.docvecs.doctag_syn0_lockf
 
         #  tally += train_document_dm(self, doc.words, doctag_indexes, alpha, work, neu1,
@@ -160,24 +210,56 @@ except ImportError:
 
         word_vocabs = [model.wv.vocab[w] for w in doc_words if w in model.wv.vocab and
                        model.wv.vocab[w].sample_int > model.random.rand() * 2**32]
+        # word_vocabs[0]: Vocab(count:19, index:14294, sample_int:4294967296)
+        # word_vacabs의 arr. oov or sample_int 값 X 면 exclude
 
         # position, word
         for pos, word in enumerate(word_vocabs):
+            # pos, word. 여기서 word는 real word 아니고 이런 형태임-> Vocab(count:19, index:14294, sample_int:4294967296)
+            #print('*****in for loop')
             reduced_window = model.random.randint(model.window)  # `b` in the original doc2vec code
             start = max(0, pos - model.window + reduced_window)
             window_pos = enumerate(word_vocabs[start:(pos + model.window + 1 - reduced_window)], start)
             word2_indexes = [word2.index for pos2, word2 in window_pos if pos2 != pos]
-            l1 = np_sum(word_vectors[word2_indexes], axis=0) + np_sum(doctag_vectors[doctag_indexes], axis=0) #hidden 값? layer1?
+            #('word2_indexes: ', [5, 1159, 53, 12, 2382, 8874, 688, 2, 67])
+            #l1 = np_sum(word_vectors[word2_indexes], axis=0) + np_sum(doctag_vectors[doctag_indexes], axis=0) #hidden 값? layer1?
+            #print(model.docvecs.get_index2tag())
+
+            weighted_doc_vectors = zeros((400, ))
+            idx2tag = model.docvecs.get_index2tag()
+
+            target_tag = idx2tag[doctag_indexes[0]]  # docvecs에서부터 온 dic
+            target_idx = tag2idx[target_tag]  # sim_operator에서부터 온 dic
+
+            probabilities = sim_operator[target_idx]
+
+            unique_indexes = len(model.docvecs) #unique tag 수 받아오기
+            for i in range(unique_indexes):
+                tag = idx2tag[i] # docvecs에서부터 온 dic
+                prob_idx = tag2idx[tag] #sim_operator에서부터 온 dic
+                weighted_doc_vectors += probabilities[prob_idx]*doctag_vectors[i]
+
+            #print(weighted_doc_vectors)
+            l1 = np_sum(word_vectors[word2_indexes], axis=0) + weighted_doc_vectors
+            # each sum-> np array . array([ -3.11090145e-03,  -5.07352932e-04,  -3.39132617e-03, ..., -5.65431488e-04], dtype=float32))
+            # l1-> np array. hidden layer 값
+
             count = len(word2_indexes) + len(doctag_indexes)
             if model.cbow_mean and count > 1 :
                 l1 /= count
             neu1e = train_cbow_pair(model, word, word2_indexes, l1, alpha,
                                     learn_vectors=False, learn_hidden=learn_hidden) #return error값...
+            # neule-> array.
             if not model.cbow_mean and count > 1:
                 neu1e /= count
             if learn_doctags:
+                # doc_vectors를 다 update 해야하는거 아닌가용???
+                for i in range(unique_indexes):
+                    doctag_vectors[i] += neu1e * doctag_locks[i]
+                """
                 for i in doctag_indexes:
                     doctag_vectors[i] += neu1e * doctag_locks[i]
+                """
             if learn_words:
                 for i in word2_indexes:
                     word_vectors[i] += neu1e * word_locks[i]
@@ -322,6 +404,15 @@ class DocvecsArray(utils.SaveLoad):
         """Return indexes and backing-arrays used in training examples."""
         return ([self._int_index(index) for index in doctag_tokens if index in self],
                 self.doctag_syn0, self.doctag_syn0_lockf, doctag_tokens)
+
+    def get_index2tag(self):
+        """Return indexes and backing-arrays used in training examples."""
+        index2tag = {}
+        for key in self.doctags.keys():
+            tag = key
+            idx = self._int_index(tag)
+            index2tag[idx] = tag
+        return index2tag
 
     def trained_item(self, indexed_tuple):
         """Persist any changes made to the given indexes (matching tuple previously
@@ -678,6 +769,7 @@ class Doc2Vec(Word2Vec):
         super(Doc2Vec, self).reset_from(other_model)
 
     def scan_vocab(self, documents, progress_per=10000, trim_rule=None, update=False):
+        logger.info("*****doc2vec scan_vocab is called!")
         logger.info("collecting all words and their counts")
         document_no = -1
         total_words = 0
@@ -720,7 +812,7 @@ class Doc2Vec(Word2Vec):
 
     def _do_train_job(self, job, alpha, inits):
         #job is sentences
-        work, neu1 = inits
+        work, neu1 = inits #fill with zeros
         tally = 0
         for doc in job:
             indexed_doctags = self.docvecs.indexed_doctags(doc.tags) #사실은 그냥 tag... no tags
