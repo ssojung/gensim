@@ -28,6 +28,14 @@ from word2vec_inner cimport bisect_left, random_int32, \
      our_dot, our_saxpy, \
      our_dot_double, our_dot_float, our_dot_noblas, our_saxpy_noblas
 
+"""
+cdef scopy_ptr scopy=<scopy_ptr>PyCObject_AsVoidPtr(fblas.scopy._cpointer)  # y = x
+cdef saxpy_ptr saxpy=<saxpy_ptr>PyCObject_AsVoidPtr(fblas.saxpy._cpointer)  # y += alpha * x
+cdef sdot_ptr sdot=<sdot_ptr>PyCObject_AsVoidPtr(fblas.sdot._cpointer)  # float = dot(x, y)
+cdef dsdot_ptr dsdot=<dsdot_ptr>PyCObject_AsVoidPtr(fblas.sdot._cpointer)  # double = dot(x, y)
+cdef snrm2_ptr snrm2=<snrm2_ptr>PyCObject_AsVoidPtr(fblas.snrm2._cpointer)  # sqrt(x^2)
+cdef sscal_ptr sscal=<sscal_ptr>PyCObject_AsVoidPtr(fblas.sscal._cpointer) # x = alpha * x
+"""
 from word2vec import FAST_VERSION
 
 DEF MAX_DOCUMENT_LEN = 10000
@@ -130,6 +138,11 @@ cdef unsigned long long fast_document_dm_neg(
     const int negative, np.uint32_t *cum_table, unsigned long long cum_table_len, unsigned long long next_random,
     REAL_t *neu1, REAL_t *syn1neg, const int predict_word_index, const REAL_t alpha, REAL_t *work,
     const int size, int learn_hidden) nogil:
+
+    """
+    next_random = fast_document_dm_neg(negative, cum_table, cum_table_len, next_random,
+                                    _neu1, syn1neg, indexes[i], _alpha, _work, size, _learn_hidden)
+    """
 
     cdef long long row2
     cdef unsigned long long modulo = 281474976710655ULL
@@ -363,6 +376,11 @@ def train_document_dbow(model, doc_words, doctag_indexes, alpha, work=None,
 def train_document_dm(model, doc_words, doctag_indexes, alpha, work=None, neu1=None,
                       learn_doctags=True, learn_words=True, learn_hidden=True,
                       word_vectors=None, word_locks=None, doctag_vectors=None, doctag_locks=None):
+    """
+     train_document_dm(self, doc.words, doctag_indexes, alpha, work, neu1,
+                                doctag_vectors=doctag_vectors, doctag_locks=doctag_locks)
+    """
+
     cdef int hs = model.hs
     cdef int negative = model.negative
     cdef int sample = (model.sample != 0)
@@ -421,6 +439,7 @@ def train_document_dm(model, doc_words, doctag_indexes, alpha, work=None, neu1=N
         syn1 = <REAL_t *>(np.PyArray_DATA(model.syn1))
 
     if negative:
+        # need to check whether it's right
         syn1neg = <REAL_t *>(np.PyArray_DATA(model.syn1neg))
         cum_table = <np.uint32_t *>(np.PyArray_DATA(model.cum_table))
         cum_table_len = len(model.cum_table)
@@ -437,6 +456,7 @@ def train_document_dm(model, doc_words, doctag_indexes, alpha, work=None, neu1=N
 
     vlookup = model.wv.vocab
     i = 0
+
     for token in doc_words:
         predict_word = vlookup[token] if token in vlookup else None
         if predict_word is None:  # shrink document to leave out word
@@ -477,14 +497,23 @@ def train_document_dm(model, doc_words, doctag_indexes, alpha, work=None, neu1=N
             memset(_neu1, 0, size * cython.sizeof(REAL_t))
             count = <REAL_t>0.0
             for m in range(j, k):
+                # sum word vectors
                 if m == i:
                     continue
                 else:
                     count += ONEF
                     our_saxpy(&size, &ONEF, &_word_vectors[indexes[m] * size], &ONE, _neu1, &ONE)
+                    # void saxpy(int n, float a, float * restrict x, float * restrict y)
+                    #{
+                    #  for (int i = 0; i < n; ++i)
+                    #      y[i] = a*x[i] + y[i];
+                    #}
             for m in range(doctag_len):
+                # sum doc vectors (in my case, # of doc tages are only 1)
                 count += ONEF
                 our_saxpy(&size, &ONEF, &_doctag_vectors[_doctag_indexes[m] * size], &ONE, _neu1, &ONE)
+            # neu1: word vectors, doc vectors 더한 값. l1...
+            # work: error 저장되어 있음
             if count > (<REAL_t>0.5):
                 inv_count = ONEF/count
             if cbow_mean:
